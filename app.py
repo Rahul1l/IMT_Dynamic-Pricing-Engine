@@ -27,11 +27,11 @@ def find_column(candidates, keywords):
 
 def load_data(uploaded_file):
     df = pd.read_csv(uploaded_file)
-    # Try to parse any likely date columns
+    # Try to parse any likely date columns (best effort)
     for col in df.columns:
         if any(k in col.lower() for k in ["date", "time"]):
             try:
-                df[col] = pd.to_datetime(df[col])
+                df[col] = pd.to_datetime(df[col], errors="coerce", infer_datetime_format=True)
             except Exception:
                 pass
     return df
@@ -55,7 +55,7 @@ def train_regression_model(df, target_col, feature_cols, test_size=0.2, random_s
     r2 = r2_score(y_test, y_pred)
     mae = mean_absolute_error(y_test, y_pred)
 
-    # RMSE: compute using MSE so it works on older scikit-learn versions
+    # RMSE via MSE (works with older sklearn versions)
     mse = mean_squared_error(y_test, y_pred)
     rmse = float(np.sqrt(mse))
 
@@ -70,28 +70,50 @@ def train_regression_model(df, target_col, feature_cols, test_size=0.2, random_s
 
 
 def build_claim_time_series(df, date_col, value_col=None, freq="M"):
-    """Return a monthly time series of claim frequency or value."""
+    """
+    Return a monthly time series of claim frequency or value.
+    Safely handles messy/non-date columns by coercing errors.
+    """
+    if date_col not in df.columns:
+        return None
+
     ts = df.copy()
+    # Robust date parsing: invalid values -> NaT instead of crash
+    ts[date_col] = pd.to_datetime(
+        ts[date_col],
+        errors="coerce",
+        infer_datetime_format=True
+    )
+
+    # Drop rows where date could not be parsed
     ts = ts.dropna(subset=[date_col])
-    ts[date_col] = pd.to_datetime(ts[date_col])
+
+    if ts.empty:
+        return None
+
     ts = ts.set_index(date_col).sort_index()
 
     if value_col:
+        if value_col not in ts.columns:
+            return None
         series = ts[value_col].resample(freq).sum()
     else:
         # Just count number of rows as claim frequency
         series = ts.resample(freq).size()
         series.name = "claim_count"
 
+    if series.empty:
+        return None
+
     return series
 
 
 def forecast_series(series, periods=6):
     """Simple time-series forecast using Holt-Winters exponential smoothing."""
-    if len(series) < 5:
+    if series is None or len(series) < 5:
         return None, None  # not enough data
 
-    # More compatible version (no damped_trend argument)
+    # Compatible version (no damped_trend arg)
     model = ExponentialSmoothing(
         series, trend="add", seasonal=None
     ).fit(optimized=True)
@@ -106,6 +128,15 @@ def analyze_sentiment(df, text_col):
 
     scores = texts.apply(analyzer.polarity_scores)
     scores_df = pd.DataFrame(list(scores))
+
+    if scores_df.empty:
+        return {
+            "compound_mean": 0.0,
+            "pos_pct": 0.0,
+            "neg_pct": 0.0,
+            "neu_pct": 100.0,
+            "overall_label": "No valid text available for sentiment analysis.",
+        }
 
     compound_mean = scores_df["compound"].mean()
     pos_pct = (scores_df["compound"] > 0.05).mean() * 100
@@ -304,7 +335,10 @@ def main():
                 history, forecast = forecast_series(series, periods=horizon)
 
                 if history is None:
-                    st.error("Not enough data points to build a time-series model.")
+                    st.error(
+                        "Could not build a time series. "
+                        "Check that your date column is valid and has enough data points."
+                    )
                 else:
                     ts_df = pd.concat(
                         [
