@@ -1,8 +1,9 @@
 streamlit
 pandas
 numpy
-scikit-learn
+scikit-learn>=1.0
 statsmodels
 vaderSentiment
 matplotlib
 plotly
+
