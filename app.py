@@ -14,7 +14,6 @@ st.set_page_config(
     layout="wide"
 )
 
-
 # ---------- Utility helpers ---------- #
 def find_column(candidates, keywords):
     """Try to find a column whose name contains any of the given keywords."""
@@ -39,7 +38,7 @@ def load_data(uploaded_file):
 
 
 def train_regression_model(df, target_col, feature_cols, test_size=0.2, random_state=42):
-    """Train a simple RandomForest regression model and return metrics and model."""
+    """Train a RandomForest regression model and return metrics and model."""
     data = df[feature_cols + [target_col]].dropna()
     X = data[feature_cols]
     y = data[target_col]
@@ -55,7 +54,10 @@ def train_regression_model(df, target_col, feature_cols, test_size=0.2, random_s
 
     r2 = r2_score(y_test, y_pred)
     mae = mean_absolute_error(y_test, y_pred)
-    rmse = mean_squared_error(y_test, y_pred, squared=False)
+
+    # RMSE: compute using MSE so it works on older scikit-learn versions
+    mse = mean_squared_error(y_test, y_pred)
+    rmse = float(np.sqrt(mse))
 
     results = pd.DataFrame(
         {
@@ -89,8 +91,9 @@ def forecast_series(series, periods=6):
     if len(series) < 5:
         return None, None  # not enough data
 
+    # More compatible version (no damped_trend argument)
     model = ExponentialSmoothing(
-        series, trend="add", seasonal=None, damped_trend=True
+        series, trend="add", seasonal=None
     ).fit(optimized=True)
 
     forecast = model.forecast(periods)
@@ -170,7 +173,9 @@ def main():
     date_candidates = [
         c
         for c in df.columns
-        if "date" in c.lower() or "time" in c.lower() or str(df[c].dtype).startswith("datetime64")
+        if "date" in c.lower()
+        or "time" in c.lower()
+        or str(df[c].dtype).startswith("datetime64")
     ]
 
     with st.expander("Step 2: Configure important columns", expanded=True):
@@ -282,11 +287,10 @@ def main():
                         )
                     submitted = st.form_submit_button("Predict premium")
 
-                if "prediction_form" in st.session_state or submitted:
-                    if submitted:
-                        x_new = np.array([[input_values[c] for c in used_features]])
-                        pred = model.predict(x_new)[0]
-                        st.success(f"Estimated premium: **{pred:,.2f}**")
+                if submitted:
+                    x_new = np.array([[input_values[c] for c in used_features]])
+                    pred = model.predict(x_new)[0]
+                    st.success(f"Estimated premium: **{pred:,.2f}**")
 
     # ---------- Tab 2: Time Series ---------- #
     with tabs[1]:
@@ -344,8 +348,6 @@ def main():
                     """
                 )
 
-                # Simple distribution table
-                st.write("Sentiment distribution summary:")
                 dist_df = pd.DataFrame(
                     {
                         "Sentiment": ["Positive", "Negative", "Neutral/Mixed"],
@@ -362,7 +364,6 @@ def main():
     with tabs[3]:
         st.header("Premium vs Claim Dashboard & Pricing Assistant")
 
-        # Claim ratio
         overall_ratio, ratio_series = compute_claim_ratio(df, premium_col, claim_col)
 
         col_a, col_b, col_c = st.columns(3)
@@ -423,7 +424,7 @@ def main():
                     "benefits) to improve perceived value."
                 )
 
-        # Data quality / model guidance
+        # Model guidance
         if "reg_metrics" in st.session_state:
             r2, mae, rmse = st.session_state["reg_metrics"]
             if r2 < 0.5:
